@@ -1,0 +1,51 @@
+name: 自动保活
+
+on:
+  schedule:
+    # 每周日 00:00 UTC 运行一次
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  keepalive:
+    name: 保活定时工作流
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: 激活所有定时工作流
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh workflow enable checkin.yml
+          gh workflow enable keepalive.yml
+
+      - name: 检出代码
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: 检查并刷新仓库活跃度
+        run: |
+          last_commit_timestamp=$(git log -1 --format=%ct)
+          now_timestamp=$(date +%s)
+          days_diff=$(( (now_timestamp - last_commit_timestamp) / 86400 ))
+          echo "距离上次提交已过去: $days_diff 天"
+          if [ "$days_diff" -ge 40 ]; then
+            echo "已超过 40 天无提交，生成保活标记以防止定时任务被停用..."
+            mkdir -p .github
+            date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/.keepalive
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add .github/.keepalive
+            git commit -m "chore: keep actions alive [skip ci]"
+            git push
+          else
+            echo "仓库近期有活动，无需额外提交。"
+          fi
